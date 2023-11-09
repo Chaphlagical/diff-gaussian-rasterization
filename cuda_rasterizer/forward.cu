@@ -194,7 +194,9 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 	// Transform point by projecting
 	float3 p_orig = {orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2]};
-	float4 p_hom = transformPoint4x4(p_orig, projmatrix);
+	float viewproj_matrix[16] = {0};
+	mul_matrix4x4(viewmatrix, projmatrix, viewproj_matrix);
+	float4 p_hom = transformPoint4x4(p_orig, viewproj_matrix);
 	float p_w = 1.0f / (p_hom.w + 0.0000001f);
 	float3 p_proj = {p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w};
 
@@ -265,8 +267,8 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 		int W, int H,
 		const float2 *__restrict__ points_xy_image,
 		const float *__restrict__ features,
-		const float4 *__restrict__ conic_opacity,
 		const float *__restrict__ depths,
+		const float4 *__restrict__ conic_opacity,
 		float *__restrict__ final_T,
 		uint32_t *__restrict__ n_contrib,
 		const float *__restrict__ bg_color,
@@ -296,14 +298,13 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
-	__shared__ float collected_depth[BLOCK_SIZE];
 
 	// Initialize helper variables
 	float T = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
 	float C[CHANNELS] = {0};
-	float depth = 0.f;
+	float D = {0};
 
 	// Iterate over batches until all done or range is complete
 	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
@@ -321,7 +322,6 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 			collected_id[block.thread_rank()] = coll_id;
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
-			collected_depth[block.thread_rank()] = depths[coll_id];
 		}
 		block.sync();
 
@@ -358,8 +358,8 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 			for (int ch = 0; ch < CHANNELS; ch++)
 				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
 
-			// Computing approximated depth
-			depth += collected_depth[j] * alpha * T;
+			// Compute  depth
+			D += depths[collected_id[j]] * alpha * T;
 
 			T = test_T;
 
@@ -377,7 +377,7 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 		n_contrib[pix_id] = last_contributor;
 		for (int ch = 0; ch < CHANNELS; ch++)
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
-		out_depth[pix_id] = depth;
+		out_depth[pix_id] = D;
 	}
 }
 
@@ -388,8 +388,8 @@ void FORWARD::render(
 	int W, int H,
 	const float2 *means2D,
 	const float *colors,
+	const float *depths,
 	const float4 *conic_opacity,
-	const float *depth,
 	float *final_T,
 	uint32_t *n_contrib,
 	const float *bg_color,
@@ -402,8 +402,8 @@ void FORWARD::render(
 		W, H,
 		means2D,
 		colors,
+		depths,
 		conic_opacity,
-		depth,
 		final_T,
 		n_contrib,
 		bg_color,
