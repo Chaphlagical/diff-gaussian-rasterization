@@ -396,6 +396,7 @@ __global__ void preprocessCUDA(
 	const float3 *dL_dmean2D,
 	glm::vec3 *dL_dmeans,
 	float *dL_dcolor,
+	float *dL_ddepth,
 	float *dL_dcov3D,
 	float *dL_dsh,
 	glm::vec3 *dL_dscale,
@@ -416,60 +417,88 @@ __global__ void preprocessCUDA(
 
 	// Compute loss gradient w.r.t. 3D means due to gradients of 2D means
 	// from rendering procedure
-	glm::vec3 dL_dmean;
-	float mul1 = (proj[0] * m.x + proj[4] * m.y + proj[8] * m.z + proj[12]) * m_w * m_w;
-	float mul2 = (proj[1] * m.x + proj[5] * m.y + proj[9] * m.z + proj[13]) * m_w * m_w;
-	dL_dmean.x = (proj[0] * m_w - proj[3] * mul1) * dL_dmean2D[idx].x + (proj[1] * m_w - proj[3] * mul2) * dL_dmean2D[idx].y;
-	dL_dmean.y = (proj[4] * m_w - proj[7] * mul1) * dL_dmean2D[idx].x + (proj[5] * m_w - proj[7] * mul2) * dL_dmean2D[idx].y;
-	dL_dmean.z = (proj[8] * m_w - proj[11] * mul1) * dL_dmean2D[idx].x + (proj[9] * m_w - proj[11] * mul2) * dL_dmean2D[idx].y;
+	{
+		glm::vec3 dL_dmean;
+		float mul1 = (proj[0] * m.x + proj[4] * m.y + proj[8] * m.z + proj[12]) * m_w * m_w;
+		float mul2 = (proj[1] * m.x + proj[5] * m.y + proj[9] * m.z + proj[13]) * m_w * m_w;
+		dL_dmean.x = (proj[0] * m_w - proj[3] * mul1) * dL_dmean2D[idx].x + (proj[1] * m_w - proj[3] * mul2) * dL_dmean2D[idx].y;
+		dL_dmean.y = (proj[4] * m_w - proj[7] * mul1) * dL_dmean2D[idx].x + (proj[5] * m_w - proj[7] * mul2) * dL_dmean2D[idx].y;
+		dL_dmean.z = (proj[8] * m_w - proj[11] * mul1) * dL_dmean2D[idx].x + (proj[9] * m_w - proj[11] * mul2) * dL_dmean2D[idx].y;
 
-	// That's the second part of the mean gradient. Previous computation
-	// of cov2D and following SH conversion also affects it.
-	dL_dmeans[idx] += dL_dmean;
+		// That's the second part of the mean gradient. Previous computation
+		// of cov2D and following SH conversion also affects it.
+		dL_dmeans[idx] += dL_dmean;
+	}
 
-	float dL_dproj[16] = {0.f};
-	dL_dproj[0] = m.x * m_w * dL_dmean2D[idx].x;
-	dL_dproj[1] = m.x * m_w * dL_dmean2D[idx].y;
-	dL_dproj[2] = 0.0;
-	dL_dproj[3] = -m.x * mul1 * dL_dmean2D[idx].x - m.x * mul2 * dL_dmean2D[idx].y;
-	dL_dproj[4] = m.y * m_w * dL_dmean2D[idx].x;
-	dL_dproj[5] = m.y * m_w * dL_dmean2D[idx].y;
-	dL_dproj[6] = 0.0;
-	dL_dproj[7] = -m.y * mul1 * dL_dmean2D[idx].x - m.y * mul2 * dL_dmean2D[idx].y;
-	dL_dproj[8] = m.z * m_w * dL_dmean2D[idx].x;
-	dL_dproj[9] = m.z * m_w * dL_dmean2D[idx].y;
-	dL_dproj[10] = 0.0;
-	dL_dproj[11] = -m.z * mul1 * dL_dmean2D[idx].x - m.z * mul2 * dL_dmean2D[idx].y;
-	dL_dproj[12] = m_w * dL_dmean2D[idx].x;
-	dL_dproj[13] = m_w * dL_dmean2D[idx].y;
-	dL_dproj[14] = 0.0;
-	dL_dproj[15] = -mul1 * dL_dmean2D[idx].x - mul2 * dL_dmean2D[idx].y;
+	// Compute loss gradient w.r.t. 3D means due to gradients of depth
+	{
+		glm::vec3 dL_dmean;
+		float mul = view_matrix[2] * m.x + view_matrix[6] * m.y + view_matrix[10] * m.z + view_matrix[14];
+		dL_dmean.x = (view_matrix[2] - view_matrix[3] * mul) * dL_ddepth[idx];
+		dL_dmean.y = (view_matrix[6] - view_matrix[7] * mul) * dL_ddepth[idx];
+		dL_dmean.z = (view_matrix[10] - view_matrix[11] * mul) * dL_ddepth[idx];
+		dL_dmeans[idx] += dL_dmean;
+	}
 
-	float transpose_projmatrix[] = {
-		projmatrix[0], projmatrix[4], projmatrix[8], projmatrix[12],
-		projmatrix[1], projmatrix[5], projmatrix[9], projmatrix[13],
-		projmatrix[2], projmatrix[6], projmatrix[10], projmatrix[14],
-		projmatrix[3], projmatrix[7], projmatrix[11], projmatrix[15]};
+	// Compute loss gradient w.r.t. view matrix due to gradients of 2D means and depth
+	{
+		float mul1 = (proj[0] * m.x + proj[4] * m.y + proj[8] * m.z + proj[12]) * m_w * m_w;
+		float mul2 = (proj[1] * m.x + proj[5] * m.y + proj[9] * m.z + proj[13]) * m_w * m_w;
+		float mul3 = view_matrix[2] * m.x + view_matrix[6] * m.y + view_matrix[10] * m.z + view_matrix[14];
 
-	float dL_dW[16] = {0.f};
-	mul_matrix4x4(dL_dproj, transpose_projmatrix, dL_dW);
+		float dL_dproj[16] = {0.f};
+		dL_dproj[0] = m.x * m_w * dL_dmean2D[idx].x;
+		dL_dproj[1] = m.x * m_w * dL_dmean2D[idx].y;
+		dL_dproj[2] = 0.0;
+		dL_dproj[3] = -m.x * mul1 * dL_dmean2D[idx].x - m.x * mul2 * dL_dmean2D[idx].y;
+		dL_dproj[4] = m.y * m_w * dL_dmean2D[idx].x;
+		dL_dproj[5] = m.y * m_w * dL_dmean2D[idx].y;
+		dL_dproj[6] = 0.0;
+		dL_dproj[7] = -m.y * mul1 * dL_dmean2D[idx].x - m.y * mul2 * dL_dmean2D[idx].y;
+		dL_dproj[8] = m.z * m_w * dL_dmean2D[idx].x;
+		dL_dproj[9] = m.z * m_w * dL_dmean2D[idx].y;
+		dL_dproj[10] = 0.0;
+		dL_dproj[11] = -m.z * mul1 * dL_dmean2D[idx].x - m.z * mul2 * dL_dmean2D[idx].y;
+		dL_dproj[12] = m_w * dL_dmean2D[idx].x;
+		dL_dproj[13] = m_w * dL_dmean2D[idx].y;
+		dL_dproj[14] = 0.0;
+		dL_dproj[15] = -mul1 * dL_dmean2D[idx].x - mul2 * dL_dmean2D[idx].y;
 
-	atomicAdd(&dL_dview[0].x, dL_dW[0]);
-	atomicAdd(&dL_dview[0].y, dL_dW[1]);
-	atomicAdd(&dL_dview[0].z, dL_dW[2]);
-	atomicAdd(&dL_dview[0].w, dL_dW[3]);
-	atomicAdd(&dL_dview[1].x, dL_dW[4]);
-	atomicAdd(&dL_dview[1].y, dL_dW[5]);
-	atomicAdd(&dL_dview[1].z, dL_dW[6]);
-	atomicAdd(&dL_dview[1].w, dL_dW[7]);
-	atomicAdd(&dL_dview[2].x, dL_dW[8]);
-	atomicAdd(&dL_dview[2].y, dL_dW[9]);
-	atomicAdd(&dL_dview[2].z, dL_dW[10]);
-	atomicAdd(&dL_dview[2].w, dL_dW[11]);
-	atomicAdd(&dL_dview[3].x, dL_dW[12]);
-	atomicAdd(&dL_dview[3].y, dL_dW[13]);
-	atomicAdd(&dL_dview[3].z, dL_dW[14]);
-	atomicAdd(&dL_dview[3].w, dL_dW[15]);
+		float transpose_projmatrix[] = {
+			projmatrix[0], projmatrix[4], projmatrix[8], projmatrix[12],
+			projmatrix[1], projmatrix[5], projmatrix[9], projmatrix[13],
+			projmatrix[2], projmatrix[6], projmatrix[10], projmatrix[14],
+			projmatrix[3], projmatrix[7], projmatrix[11], projmatrix[15]};
+
+		float dL_dW[16] = {0.f};
+		mul_matrix4x4(dL_dproj, transpose_projmatrix, dL_dW);
+
+		// dL_dW[2] += m.x * dL_ddepth[idx];
+		// dL_dW[3] += -m.x * mul3 * dL_ddepth[idx];
+		// dL_dW[6] += m.y * dL_ddepth[idx];
+		// dL_dW[7] += -m.y * mul3 * dL_ddepth[idx];
+		// dL_dW[10] += m.z * dL_ddepth[idx];
+		// dL_dW[11] += -m.z * mul3 * dL_ddepth[idx];
+		// dL_dW[14] += dL_ddepth[idx];
+		// dL_dW[15] += -mul3 * dL_ddepth[idx];
+
+		atomicAdd(&dL_dview[0].x, dL_dW[0]);
+		atomicAdd(&dL_dview[0].y, dL_dW[1]);
+		atomicAdd(&dL_dview[0].z, dL_dW[2]);
+		atomicAdd(&dL_dview[0].w, dL_dW[3]);
+		atomicAdd(&dL_dview[1].x, dL_dW[4]);
+		atomicAdd(&dL_dview[1].y, dL_dW[5]);
+		atomicAdd(&dL_dview[1].z, dL_dW[6]);
+		atomicAdd(&dL_dview[1].w, dL_dW[7]);
+		atomicAdd(&dL_dview[2].x, dL_dW[8]);
+		atomicAdd(&dL_dview[2].y, dL_dW[9]);
+		atomicAdd(&dL_dview[2].z, dL_dW[10]);
+		atomicAdd(&dL_dview[2].w, dL_dW[11]);
+		atomicAdd(&dL_dview[3].x, dL_dW[12]);
+		atomicAdd(&dL_dview[3].y, dL_dW[13]);
+		atomicAdd(&dL_dview[3].z, dL_dW[14]);
+		atomicAdd(&dL_dview[3].w, dL_dW[15]);
+	}
 
 	// Compute gradient updates due to computing colors from SHs
 	if (shs)
@@ -494,12 +523,13 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 		const float *__restrict__ depths,
 		const float *__restrict__ final_Ts,
 		const uint32_t *__restrict__ n_contrib,
-		const float *__restrict__ dL_dpixels,
-		const float *__restrict__ dL_ddepths,
+		const float *__restrict__ dL_dpixel_colors,
+		const float *__restrict__ dL_dpixel_depths,
 		float3 *__restrict__ dL_dmean2D,
 		float4 *__restrict__ dL_dconic2D,
 		float *__restrict__ dL_dopacity,
 		float *__restrict__ dL_dcolors,
+		float *__restrict__ dL_ddepths,
 		float4 *__restrict__ dL_dview)
 {
 	// We rasterize again. Compute necessary block info.
@@ -537,13 +567,13 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 
 	float accum_rec[C] = {0.f};
 	float accum_depth_rec = 0.f;
-	float dL_dpixel[C] = {0.f};
-	float dL_ddepth = 0.f;
+	float dL_dpixel_color[C] = {0.f};
+	float dL_dpixel_depth = 0.f;
 	if (inside)
 	{
 		for (int i = 0; i < C; i++)
-			dL_dpixel[i] = dL_dpixels[i * H * W + pix_id];
-		dL_ddepth = dL_ddepths[pix_id];
+			dL_dpixel_color[i] = dL_dpixel_colors[i * H * W + pix_id];
+		dL_dpixel_depth = dL_dpixel_depths[pix_id];
 	}
 
 	float last_alpha = 0.f;
@@ -598,6 +628,7 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 
 			T = T / (1.f - alpha);
 			const float dchannel_dcolor = alpha * T;
+			const float dchannel_ddepth = alpha * T;
 
 			// Propagate gradients to per-Gaussian colors and keep
 			// gradients w.r.t. alpha (blending factor for a Gaussian/pixel
@@ -611,7 +642,7 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 				accum_rec[ch] = last_alpha * last_color[ch] + (1.f - last_alpha) * accum_rec[ch];
 				last_color[ch] = c;
 
-				const float dL_dchannel = dL_dpixel[ch];
+				const float dL_dchannel = dL_dpixel_color[ch];
 				dL_dalpha += (c - accum_rec[ch]) * dL_dchannel;
 				// Update the gradients w.r.t. color of the Gaussian.
 				// Atomic, since this pixel is just one of potentially
@@ -620,10 +651,11 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 			}
 
 			// Handle gradient from depth
-			const float c_d = collected_depths[j];
+			const float dep = collected_depths[j];
 			accum_depth_rec = last_alpha * last_depth + (1.f - last_alpha) * accum_depth_rec;
-			last_depth = c_d;
-			dL_dalpha += (c_d - accum_depth_rec) * dL_ddepth;
+			last_depth = dep;
+			dL_dalpha += (dep - accum_depth_rec) * dL_dpixel_depth;
+			atomicAdd(&(dL_ddepths[global_id]), dchannel_ddepth * dL_dpixel_depth);
 
 			dL_dalpha *= T;
 			// Update last alpha (to be used in the next iteration)
@@ -633,7 +665,7 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 			// the background color is added if nothing left to blend
 			float bg_dot_dpixel = 0;
 			for (int i = 0; i < C; i++)
-				bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
+				bg_dot_dpixel += bg_color[i] * dL_dpixel_color[i];
 			dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
 
 			// Helpful reusable temporary variables
@@ -677,6 +709,7 @@ void BACKWARD::preprocess(
 	const float *dL_dconic,
 	glm::vec3 *dL_dmean3D,
 	float *dL_dcolor,
+	float *dL_ddepth,
 	float *dL_dcov3D,
 	float *dL_dsh,
 	glm::vec3 *dL_dscale,
@@ -720,6 +753,7 @@ void BACKWARD::preprocess(
 		(float3 *)dL_dmean2D,
 		(glm::vec3 *)dL_dmean3D,
 		dL_dcolor,
+		dL_ddepth,
 		dL_dcov3D,
 		dL_dsh,
 		dL_dscale,
@@ -739,12 +773,13 @@ void BACKWARD::render(
 	const float *depths,
 	const float *final_Ts,
 	const uint32_t *n_contrib,
-	const float *dL_dpixels,
-	const float *dL_ddepths,
+	const float *dL_dpixel_colors,
+	const float *dL_dpixel_depths,
 	float3 *dL_dmean2D,
 	float4 *dL_dconic2D,
 	float *dL_dopacity,
 	float *dL_dcolors,
+	float *dL_ddepths,
 	float4 *dL_dview)
 {
 	renderCUDA<NUM_CHANNELS><<<grid, block>>>(
@@ -758,11 +793,12 @@ void BACKWARD::render(
 		depths,
 		final_Ts,
 		n_contrib,
-		dL_dpixels,
-		dL_ddepths,
+		dL_dpixel_colors,
+		dL_dpixel_depths,
 		dL_dmean2D,
 		dL_dconic2D,
 		dL_dopacity,
 		dL_dcolors,
+		dL_ddepths,
 		dL_dview);
 }
