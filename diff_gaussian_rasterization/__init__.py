@@ -91,7 +91,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             # Copy them before they can be corrupted
             cpu_args = cpu_deep_copy_tuple(args)
             try:
-                num_rendered, color, depth, radii, geomBuffer, binningBuffer, imgBuffer = _C.rasterize_gaussians(
+                num_rendered, color, depth, alpha, radii, geomBuffer, binningBuffer, imgBuffer = _C.rasterize_gaussians(
                     *args)
             except Exception as ex:
                 torch.save(cpu_args, "snapshot_fw.dump")
@@ -99,23 +99,23 @@ class _RasterizeGaussians(torch.autograd.Function):
                     "\nAn error occured in forward. Please forward snapshot_fw.dump for debugging.")
                 raise ex
         else:
-            num_rendered, color, depth, radii, geomBuffer, binningBuffer, imgBuffer = _C.rasterize_gaussians(
+            num_rendered, color, depth, alpha, radii, geomBuffer, binningBuffer, imgBuffer = _C.rasterize_gaussians(
                 *args)
 
         # Keep relevant tensors for backward
         ctx.raster_settings = raster_settings
         ctx.num_rendered = num_rendered
-        ctx.save_for_backward(colors_precomp, means3D, scales, rotations,
-                              cov3Ds_precomp, viewmatrix, radii, sh, geomBuffer, binningBuffer, imgBuffer)
-        return color, radii, depth
+        ctx.save_for_backward(colors_precomp, means3D, scales, rotations, cov3Ds_precomp,
+                              viewmatrix, radii, sh, geomBuffer, binningBuffer, imgBuffer, alpha)
+        return color, depth, alpha, radii
 
     @staticmethod
-    def backward(ctx, grad_out_color, grad_out_radii, grad_out_depth):
+    def backward(ctx, grad_out_color, grad_out_depth, grad_out_alpha, _):
 
         # Restore necessary values from context
         num_rendered = ctx.num_rendered
         raster_settings = ctx.raster_settings
-        colors_precomp, means3D, scales, rotations, cov3Ds_precomp, viewmatrix, radii, sh, geomBuffer, binningBuffer, imgBuffer = ctx.saved_tensors
+        colors_precomp, means3D, scales, rotations, cov3Ds_precomp, viewmatrix, radii, sh, geomBuffer, binningBuffer, imgBuffer, alpha = ctx.saved_tensors
 
         # Restructure args as C++ method expects them
         args = (raster_settings.bg,
@@ -132,6 +132,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                 raster_settings.tanfovy,
                 grad_out_color,
                 grad_out_depth,
+                grad_out_alpha,
                 sh,
                 raster_settings.sh_degree,
                 raster_settings.campos,
@@ -139,6 +140,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                 num_rendered,
                 binningBuffer,
                 imgBuffer,
+                alpha,
                 raster_settings.debug)
 
         # Compute gradients for relevant tensors by invoking backward method
@@ -156,7 +158,6 @@ class _RasterizeGaussians(torch.autograd.Function):
         else:
             grad_means2D, grad_colors_precomp, grad_opacities, grad_means3D, grad_cov3Ds_precomp, grad_sh, grad_scales, grad_rotations, grad_viewmatrix = _C.rasterize_gaussians_backward(
                 *args)
-
         grads = (
             grad_means3D,
             grad_means2D,
@@ -192,13 +193,13 @@ class GaussianRasterizer(nn.Module):
         super().__init__()
         self.raster_settings = raster_settings
 
-    def markVisible(self, positions):
+    def markVisible(self, positions, viewmatrix):
         # Mark visible points (based on frustum culling for camera) with a boolean
         with torch.no_grad():
             raster_settings = self.raster_settings
             visible = _C.mark_visible(
                 positions,
-                raster_settings.viewmatrix,
+                viewmatrix,
                 raster_settings.projmatrix)
 
         return visible

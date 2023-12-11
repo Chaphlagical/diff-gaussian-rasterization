@@ -188,15 +188,15 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	tiles_touched[idx] = 0;
 
 	// Perform near culling, quit if outside.
+	float proj[16] = {0.f};
+	mul_matrix4x4(viewmatrix, projmatrix, proj);
 	float3 p_view;
-	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
+	if (!in_frustum(idx, orig_points, viewmatrix, proj, prefiltered, p_view))
 		return;
 
 	// Transform point by projecting
 	float3 p_orig = {orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2]};
-	float viewproj_matrix[16] = {0};
-	mul_matrix4x4(viewmatrix, projmatrix, viewproj_matrix);
-	float4 p_hom = transformPoint4x4(p_orig, viewproj_matrix);
+	float4 p_hom = transformPoint4x4(p_orig, proj);
 	float p_w = 1.0f / (p_hom.w + 0.0000001f);
 	float3 p_proj = {p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w};
 
@@ -269,11 +269,11 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 		const float *__restrict__ features,
 		const float *__restrict__ depths,
 		const float4 *__restrict__ conic_opacity,
-		float *__restrict__ final_T,
 		uint32_t *__restrict__ n_contrib,
 		const float *__restrict__ bg_color,
 		float *__restrict__ out_color,
-		float *__restrict__ out_depth)
+		float *__restrict__ out_depth,
+		float *__restrict__ out_alpha)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -304,7 +304,8 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
 	float C[CHANNELS] = {0};
-	float D = {0};
+	float weight = 0.f;
+	float D = 0.f;
 
 	// Iterate over batches until all done or range is complete
 	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
@@ -357,8 +358,7 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < CHANNELS; ch++)
 				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
-
-			// Compute  depth
+			weight += alpha * T;
 			D += depths[collected_id[j]] * alpha * T;
 
 			T = test_T;
@@ -373,10 +373,10 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 	// rendering data to the frame and auxiliary buffers.
 	if (inside)
 	{
-		final_T[pix_id] = T;
 		n_contrib[pix_id] = last_contributor;
 		for (int ch = 0; ch < CHANNELS; ch++)
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
+		out_alpha[pix_id] = weight;
 		out_depth[pix_id] = D;
 	}
 }
@@ -390,11 +390,11 @@ void FORWARD::render(
 	const float *colors,
 	const float *depths,
 	const float4 *conic_opacity,
-	float *final_T,
 	uint32_t *n_contrib,
 	const float *bg_color,
 	float *out_color,
-	float *out_depth)
+	float *out_depth,
+	float *out_alpha)
 {
 	renderCUDA<NUM_CHANNELS><<<grid, block>>>(
 		ranges,
@@ -404,11 +404,11 @@ void FORWARD::render(
 		colors,
 		depths,
 		conic_opacity,
-		final_T,
 		n_contrib,
 		bg_color,
 		out_color,
-		out_depth);
+		out_depth,
+		out_alpha);
 }
 
 void FORWARD::preprocess(int P, int D, int M,

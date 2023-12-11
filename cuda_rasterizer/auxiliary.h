@@ -90,8 +90,7 @@ __forceinline__ __device__ float4 transformPoint4x4(const float3 &p, const float
 		matrix[0] * p.x + matrix[4] * p.y + matrix[8] * p.z + matrix[12],
 		matrix[1] * p.x + matrix[5] * p.y + matrix[9] * p.z + matrix[13],
 		matrix[2] * p.x + matrix[6] * p.y + matrix[10] * p.z + matrix[14],
-		matrix[3] * p.x + matrix[7] * p.y + matrix[11] * p.z + matrix[15],
-	};
+		matrix[3] * p.x + matrix[7] * p.y + matrix[11] * p.z + matrix[15]};
 	return transformed;
 }
 
@@ -165,9 +164,7 @@ __forceinline__ __device__ bool in_frustum(int idx,
 	float3 p_orig = {orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2]};
 
 	// Bring points to screen space
-	float viewproj_matrix[16] = {0};
-	mul_matrix4x4(viewmatrix, projmatrix, viewproj_matrix);
-	float4 p_hom = transformPoint4x4(p_orig, viewproj_matrix);
+	float4 p_hom = transformPoint4x4(p_orig, projmatrix);
 	float p_w = 1.0f / (p_hom.w + 0.0000001f);
 	float3 p_proj = {p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w};
 	p_view = transformPoint4x3(p_orig, viewmatrix);
