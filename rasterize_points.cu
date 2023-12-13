@@ -145,7 +145,8 @@ RasterizeGaussiansBackwardCUDA(
 	const int R,
 	const torch::Tensor &binningBuffer,
 	const torch::Tensor &imageBuffer,
-	const torch::Tensor &alphas,
+	const torch::Tensor &out_alpha,
+	const torch::Tensor &out_depth,
 	const bool debug)
 {
 	const int P = means3D.size(0);
@@ -169,6 +170,7 @@ RasterizeGaussiansBackwardCUDA(
 	torch::Tensor dL_dscales = torch::zeros({P, 3}, means3D.options());
 	torch::Tensor dL_drotations = torch::zeros({P, 4}, means3D.options());
 	torch::Tensor dL_dview = torch::zeros({4, 4}, means3D.options());
+	torch::Tensor valid_mask = torch::full({P}, 0, means3D.options().dtype(torch::kInt32));
 
 	if (P != 0)
 	{
@@ -178,7 +180,8 @@ RasterizeGaussiansBackwardCUDA(
 											 means3D.contiguous().data<float>(),
 											 sh.contiguous().data<float>(),
 											 colors.contiguous().data<float>(),
-											 alphas.contiguous().data<float>(),
+											 out_alpha.contiguous().data<float>(),
+											 out_depth.contiguous().data<float>(),
 											 scales.data_ptr<float>(),
 											 scale_modifier,
 											 rotations.data_ptr<float>(),
@@ -195,6 +198,7 @@ RasterizeGaussiansBackwardCUDA(
 											 dL_dout_color.contiguous().data<float>(),
 											 dL_dout_depth.contiguous().data<float>(),
 											 dL_dout_alpha.contiguous().data<float>(),
+											 valid_mask.contiguous().data<int>(),
 											 dL_dmeans2D.contiguous().data<float>(),
 											 dL_dconic.contiguous().data<float>(),
 											 dL_dopacity.contiguous().data<float>(),

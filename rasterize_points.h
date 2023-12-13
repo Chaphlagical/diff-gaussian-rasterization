@@ -61,7 +61,8 @@ RasterizeGaussiansBackwardCUDA(
 	const int R,
 	const torch::Tensor &binningBuffer,
 	const torch::Tensor &imageBuffer,
-	const torch::Tensor &alpha,
+	const torch::Tensor &out_alpha,
+	const torch::Tensor &out_depth,
 	const bool debug);
 
 torch::Tensor markVisible(

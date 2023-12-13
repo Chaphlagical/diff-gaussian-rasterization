@@ -106,7 +106,7 @@ class _RasterizeGaussians(torch.autograd.Function):
         ctx.raster_settings = raster_settings
         ctx.num_rendered = num_rendered
         ctx.save_for_backward(colors_precomp, means3D, scales, rotations, cov3Ds_precomp,
-                              viewmatrix, radii, sh, geomBuffer, binningBuffer, imgBuffer, alpha)
+                              viewmatrix, radii, sh, geomBuffer, binningBuffer, imgBuffer, alpha, depth)
         return color, depth, alpha, radii
 
     @staticmethod
@@ -115,7 +115,7 @@ class _RasterizeGaussians(torch.autograd.Function):
         # Restore necessary values from context
         num_rendered = ctx.num_rendered
         raster_settings = ctx.raster_settings
-        colors_precomp, means3D, scales, rotations, cov3Ds_precomp, viewmatrix, radii, sh, geomBuffer, binningBuffer, imgBuffer, alpha = ctx.saved_tensors
+        colors_precomp, means3D, scales, rotations, cov3Ds_precomp, viewmatrix, radii, sh, geomBuffer, binningBuffer, imgBuffer, out_alpha, out_depth = ctx.saved_tensors
 
         # Restructure args as C++ method expects them
         args = (raster_settings.bg,
@@ -140,7 +140,8 @@ class _RasterizeGaussians(torch.autograd.Function):
                 num_rendered,
                 binningBuffer,
                 imgBuffer,
-                alpha,
+                out_alpha,
+                out_depth,
                 raster_settings.debug)
 
         # Compute gradients for relevant tensors by invoking backward method
@@ -158,6 +159,7 @@ class _RasterizeGaussians(torch.autograd.Function):
         else:
             grad_means2D, grad_colors_precomp, grad_opacities, grad_means3D, grad_cov3Ds_precomp, grad_sh, grad_scales, grad_rotations, grad_viewmatrix = _C.rasterize_gaussians_backward(
                 *args)
+
         grads = (
             grad_means3D,
             grad_means2D,

@@ -17,7 +17,7 @@ namespace cg = cooperative_groups;
 
 // Backward pass for conversion of spherical harmonics to RGB for
 // each Gaussian.
-__device__ void computeColorFromSH(int idx, int deg, int max_coeffs, const glm::vec3 *means, glm::vec3 campos, const float *shs, const bool *clamped, const glm::vec3 *dL_dcolor, glm::vec3 *dL_dmeans, glm::vec3 *dL_dshs, glm::vec4 *dL_dview)
+__device__ void computeColorFromSH(int idx, int deg, int max_coeffs, const int *valid_mask, const glm::vec3 *means, glm::vec3 campos, const float *shs, const bool *clamped, const glm::vec3 *dL_dcolor, glm::vec3 *dL_dmeans, glm::vec3 *dL_dshs, glm::vec4 *dL_dview)
 {
 	// Compute intermediate values, as it is done during forward
 	glm::vec3 pos = means[idx];
@@ -134,9 +134,12 @@ __device__ void computeColorFromSH(int idx, int deg, int max_coeffs, const glm::
 	// Additional mean gradient is accumulated in below methods.
 	dL_dmeans[idx] += glm::vec3(dL_dmean.x, dL_dmean.y, dL_dmean.z);
 
-	// atomicAdd(&dL_dview[3].x, -dL_dmean.x);
-	// atomicAdd(&dL_dview[3].y, -dL_dmean.y);
-	// atomicAdd(&dL_dview[3].z, -dL_dmean.z);
+	if (valid_mask[idx] > 0)
+	{
+		atomicAdd(&dL_dview[3].x, -dL_dmean.x);
+		atomicAdd(&dL_dview[3].y, -dL_dmean.y);
+		atomicAdd(&dL_dview[3].z, -dL_dmean.z);
+	}
 }
 
 // Backward version of INVERSE 2D covariance matrix computation
@@ -150,6 +153,7 @@ __global__ void computeCov2DCUDA(int P,
 								 const float tan_fovx, float tan_fovy,
 								 const float *view_matrix,
 								 const float *dL_dconics,
+								 const int *valid_mask,
 								 float3 *dL_dmeans,
 								 float *dL_dcov,
 								 glm::vec4 *dL_dview)
@@ -284,7 +288,7 @@ __global__ void computeCov2DCUDA(int P,
 	float dL_dW21 = J[0][2] * dL_dT01 + J[1][2] * dL_dT11 + dL_dtz * mean.y;
 	float dL_dW22 = J[0][2] * dL_dT02 + J[1][2] * dL_dT12 + dL_dtz * mean.z;
 
-	if (idx < 6000)
+	if (valid_mask[idx] > 0)
 	{
 		atomicAdd(&dL_dview[0].x, dL_dW00);
 		atomicAdd(&dL_dview[0].y, dL_dW10);
@@ -383,6 +387,7 @@ __global__ void preprocessCUDA(
 	const float *projmatrix,
 	const glm::vec3 *campos,
 	const float3 *dL_dmean2D,
+	const int *valid_mask,
 	glm::vec3 *dL_dmeans,
 	float *dL_dcolor,
 	float *dL_ddepth,
@@ -462,7 +467,7 @@ __global__ void preprocessCUDA(
 	dL_dW[14] += dL_ddepth[idx];
 	dL_dW[15] += -mul3 * dL_ddepth[idx];
 
-	if (idx < 6000)
+	if (valid_mask[idx] > 0)
 	{
 		atomicAdd(&dL_dview[0].x, dL_dW[0]);
 		atomicAdd(&dL_dview[0].y, dL_dW[1]);
@@ -488,7 +493,7 @@ __global__ void preprocessCUDA(
 
 	// Compute gradient updates due to computing colors from SHs
 	if (shs)
-		computeColorFromSH(idx, D, M, (glm::vec3 *)means, *campos, shs, clamped, (glm::vec3 *)dL_dcolor, (glm::vec3 *)dL_dmeans, (glm::vec3 *)dL_dsh, dL_dview);
+		computeColorFromSH(idx, D, M, valid_mask, (glm::vec3 *)means, *campos, shs, clamped, (glm::vec3 *)dL_dcolor, (glm::vec3 *)dL_dmeans, (glm::vec3 *)dL_dsh, dL_dview);
 
 	// Compute gradient updates due to computing covariance from scale/rotation
 	if (scales)
@@ -507,13 +512,15 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 		const float4 *__restrict__ conic_opacity,
 		const float *__restrict__ colors,
 		const float *__restrict__ depths,
-		const float *__restrict__ alphas,
+		const float *__restrict__ out_alpha,
+		const float *__restrict__ out_depth,
 		const uint32_t *__restrict__ n_contrib,
 		const float *__restrict__ dL_dpixels,
 		const float *__restrict__ dL_dpixel_depths,
 		const float *__restrict__ dL_dalphas,
 		float3 *__restrict__ dL_dmean2D,
 		float4 *__restrict__ dL_dconic2D,
+		int *__restrict__ valid_mask,
 		float *__restrict__ dL_dopacity,
 		float *__restrict__ dL_dcolors,
 		float *__restrict__ dL_ddepths)
@@ -543,8 +550,9 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 
 	// In the forward, we stored the final value for T, the
 	// product of all (1 - alpha) factors.
-	const float T_final = inside ? (1 - alphas[pix_id]) : 0;
+	const float T_final = inside ? (1 - out_alpha[pix_id]) : 0;
 	float T = T_final;
+	const float pixel_depth = inside ? out_depth[pix_id] : 0;
 
 	// We start from the back. The ID of the last contributing
 	// Gaussian is known from each pixel from the forward.
@@ -624,6 +632,7 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 			// pair).
 			float dL_dopa = 0.0f;
 			const int global_id = collected_id[j];
+
 			for (int ch = 0; ch < C; ch++)
 			{
 				const float c = collected_colors[ch * BLOCK_SIZE + j];
@@ -649,7 +658,6 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 			// Propagate gradients from pixel alpha (weights_sum) to opacity
 			accum_alpha_rec = last_alpha + (1.f - last_alpha) * accum_alpha_rec;
 			dL_dopa += (1 - accum_alpha_rec) * dL_dalpha;
-
 			dL_dopa *= T;
 			// Update last alpha (to be used in the next iteration)
 			last_alpha = alpha;
@@ -667,6 +675,11 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 			const float gdy = G * d.y;
 			const float dG_ddelx = -gdx * con_o.x - gdy * con_o.y;
 			const float dG_ddely = -gdy * con_o.z - gdx * con_o.y;
+
+			// Update valid point that close to depth for camera pose refinement
+			const int point_valid = (abs(pixel_depth - c_d) < abs(1e-2f * pixel_depth));
+			// const int point_valid = pixel_depth > c_d;
+			atomicAdd(&(valid_mask[global_id]), point_valid);
 
 			// Update gradients w.r.t. 2D mean position of the Gaussian
 			atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx * ddelx_dx);
@@ -698,6 +711,7 @@ void BACKWARD::preprocess(
 	const float focal_x, float focal_y,
 	const float tan_fovx, float tan_fovy,
 	const glm::vec3 *campos,
+	const int *valid_mask,
 	const float3 *dL_dmean2D,
 	const float *dL_dconic,
 	glm::vec3 *dL_dmean3D,
@@ -724,6 +738,7 @@ void BACKWARD::preprocess(
 		tan_fovy,
 		viewmatrix,
 		dL_dconic,
+		valid_mask,
 		(float3 *)dL_dmean3D,
 		dL_dcov3D,
 		dL_dview);
@@ -744,6 +759,7 @@ void BACKWARD::preprocess(
 		projmatrix,
 		campos,
 		(float3 *)dL_dmean2D,
+		valid_mask,
 		(glm::vec3 *)dL_dmean3D,
 		dL_dcolor,
 		dL_ddepth,
@@ -764,11 +780,13 @@ void BACKWARD::render(
 	const float4 *conic_opacity,
 	const float *colors,
 	const float *depths,
-	const float *alphas,
+	const float *out_alpha,
+	const float *out_depth,
 	const uint32_t *n_contrib,
 	const float *dL_dpixels,
 	const float *dL_dpixel_depths,
 	const float *dL_dalphas,
+	int *valid_mask,
 	float3 *dL_dmean2D,
 	float4 *dL_dconic2D,
 	float *dL_dopacity,
@@ -784,13 +802,15 @@ void BACKWARD::render(
 		conic_opacity,
 		colors,
 		depths,
-		alphas,
+		out_alpha,
+		out_depth,
 		n_contrib,
 		dL_dpixels,
 		dL_dpixel_depths,
 		dL_dalphas,
 		dL_dmean2D,
 		dL_dconic2D,
+		valid_mask,
 		dL_dopacity,
 		dL_dcolors,
 		dL_ddepths);
