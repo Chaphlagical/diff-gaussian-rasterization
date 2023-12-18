@@ -134,7 +134,7 @@ __device__ void computeColorFromSH(int idx, int deg, int max_coeffs, const int *
 	// Additional mean gradient is accumulated in below methods.
 	dL_dmeans[idx] += glm::vec3(dL_dmean.x, dL_dmean.y, dL_dmean.z);
 
-	if (valid_mask[idx] > 0)
+	// if (valid_mask[idx] > 0)
 	{
 		atomicAdd(&dL_dview[3].x, -dL_dmean.x);
 		atomicAdd(&dL_dview[3].y, -dL_dmean.y);
@@ -288,7 +288,7 @@ __global__ void computeCov2DCUDA(int P,
 	float dL_dW21 = J[0][2] * dL_dT01 + J[1][2] * dL_dT11 + dL_dtz * mean.y;
 	float dL_dW22 = J[0][2] * dL_dT02 + J[1][2] * dL_dT12 + dL_dtz * mean.z;
 
-	if (valid_mask[idx] > 0)
+	// if (valid_mask[idx] > 0)
 	{
 		atomicAdd(&dL_dview[0].x, dL_dW00);
 		atomicAdd(&dL_dview[0].y, dL_dW10);
@@ -458,16 +458,16 @@ __global__ void preprocessCUDA(
 	float dL_dW[16] = {0.f};
 	mul_matrix4x4(dL_dproj, trans_proj, dL_dW);
 
-	dL_dW[2] += m.x * dL_ddepth[idx];
-	dL_dW[3] += -m.x * mul3 * dL_ddepth[idx];
-	dL_dW[6] += m.y * dL_ddepth[idx];
-	dL_dW[7] += -m.y * mul3 * dL_ddepth[idx];
-	dL_dW[10] += m.z * dL_ddepth[idx];
-	dL_dW[11] += -m.z * mul3 * dL_ddepth[idx];
-	dL_dW[14] += dL_ddepth[idx];
-	dL_dW[15] += -mul3 * dL_ddepth[idx];
+	// dL_dW[2] += m.x * dL_ddepth[idx];
+	// dL_dW[3] += -m.x * mul3 * dL_ddepth[idx];
+	// dL_dW[6] += m.y * dL_ddepth[idx];
+	// dL_dW[7] += -m.y * mul3 * dL_ddepth[idx];
+	// dL_dW[10] += m.z * dL_ddepth[idx];
+	// dL_dW[11] += -m.z * mul3 * dL_ddepth[idx];
+	// dL_dW[14] += dL_ddepth[idx];
+	// dL_dW[15] += -mul3 * dL_ddepth[idx];
 
-	if (valid_mask[idx] > 0)
+	// if (valid_mask[idx] > 0)
 	{
 		atomicAdd(&dL_dview[0].x, dL_dW[0]);
 		atomicAdd(&dL_dview[0].y, dL_dW[1]);
@@ -679,7 +679,7 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 			// Update valid point that close to depth for camera pose refinement
 			const int point_valid = (abs(pixel_depth - c_d) < abs(1e-2f * pixel_depth));
 			// const int point_valid = pixel_depth > c_d;
-			atomicAdd(&(valid_mask[global_id]), point_valid);
+			// atomicAdd(&(valid_mask[global_id]), point_valid);
 
 			// Update gradients w.r.t. 2D mean position of the Gaussian
 			atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx * ddelx_dx);
