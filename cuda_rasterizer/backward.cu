@@ -17,7 +17,7 @@ namespace cg = cooperative_groups;
 
 // Backward pass for conversion of spherical harmonics to RGB for
 // each Gaussian.
-__device__ void computeColorFromSH(int idx, int deg, int max_coeffs, const int *valid_mask, const glm::vec3 *means, glm::vec3 campos, const float *shs, const bool *clamped, const glm::vec3 *dL_dcolor, glm::vec3 *dL_dmeans, glm::vec3 *dL_dshs, glm::vec4 *dL_dview)
+__device__ void computeColorFromSH(int P, int idx, int deg, int max_coeffs, const int *valid_mask, const glm::vec3 *means, glm::vec3 campos, const float *shs, const bool *clamped, const glm::vec3 *dL_dcolor, glm::vec3 *dL_dmeans, glm::vec3 *dL_dshs, glm::vec4 *dL_dview)
 {
 	// Compute intermediate values, as it is done during forward
 	glm::vec3 pos = means[idx];
@@ -136,9 +136,9 @@ __device__ void computeColorFromSH(int idx, int deg, int max_coeffs, const int *
 
 	// if (valid_mask[idx] > 0)
 	{
-		atomicAdd(&dL_dview[3].x, -dL_dmean.x);
-		atomicAdd(&dL_dview[3].y, -dL_dmean.y);
-		atomicAdd(&dL_dview[3].z, -dL_dmean.z);
+		// atomicAdd(&dL_dview[3].x, -dL_dmean.x);
+		// atomicAdd(&dL_dview[3].y, -dL_dmean.y);
+		// atomicAdd(&dL_dview[3].z, -dL_dmean.z);
 	}
 }
 
@@ -290,18 +290,18 @@ __global__ void computeCov2DCUDA(int P,
 
 	// if (valid_mask[idx] > 0)
 	{
-		atomicAdd(&dL_dview[0].x, dL_dW00);
-		atomicAdd(&dL_dview[0].y, dL_dW10);
-		atomicAdd(&dL_dview[0].z, dL_dW20);
-		atomicAdd(&dL_dview[1].x, dL_dW01);
-		atomicAdd(&dL_dview[1].y, dL_dW11);
-		atomicAdd(&dL_dview[1].z, dL_dW21);
-		atomicAdd(&dL_dview[2].x, dL_dW02);
-		atomicAdd(&dL_dview[2].y, dL_dW12);
-		atomicAdd(&dL_dview[2].z, dL_dW22);
-		atomicAdd(&dL_dview[3].x, dL_dtx);
-		atomicAdd(&dL_dview[3].y, dL_dty);
-		atomicAdd(&dL_dview[3].z, dL_dtz);
+		atomicAdd(&dL_dview[0].x, dL_dW00 / (float)P);
+		atomicAdd(&dL_dview[0].y, dL_dW10 / (float)P);
+		atomicAdd(&dL_dview[0].z, dL_dW20 / (float)P);
+		atomicAdd(&dL_dview[1].x, dL_dW01 / (float)P);
+		atomicAdd(&dL_dview[1].y, dL_dW11 / (float)P);
+		atomicAdd(&dL_dview[1].z, dL_dW21 / (float)P);
+		atomicAdd(&dL_dview[2].x, dL_dW02 / (float)P);
+		atomicAdd(&dL_dview[2].y, dL_dW12 / (float)P);
+		atomicAdd(&dL_dview[2].z, dL_dW22 / (float)P);
+		atomicAdd(&dL_dview[3].x, dL_dtx / (float)P);
+		atomicAdd(&dL_dview[3].y, dL_dty / (float)P);
+		atomicAdd(&dL_dview[3].z, dL_dtz / (float)P);
 	}
 }
 
@@ -311,10 +311,10 @@ __device__ void computeCov3D(int idx, const glm::vec3 scale, float mod, const gl
 {
 	// Recompute (intermediate) results for the 3D covariance computation.
 	glm::vec4 q = rot; // / glm::length(rot);
-	float r = q.x;
-	float x = q.y;
-	float y = q.z;
-	float z = q.w;
+	float x = q.x;
+	float y = q.y;
+	float z = q.z;
+	float r = q.w;
 
 	glm::mat3 R = glm::mat3(
 		1.f - 2.f * (y * y + z * z), 2.f * (x * y - r * z), 2.f * (x * z + r * y),
@@ -469,22 +469,18 @@ __global__ void preprocessCUDA(
 
 	// if (valid_mask[idx] > 0)
 	{
-		atomicAdd(&dL_dview[0].x, dL_dW[0]);
-		atomicAdd(&dL_dview[0].y, dL_dW[1]);
-		atomicAdd(&dL_dview[0].z, dL_dW[2]);
-		atomicAdd(&dL_dview[0].w, dL_dW[3]);
-		atomicAdd(&dL_dview[1].x, dL_dW[4]);
-		atomicAdd(&dL_dview[1].y, dL_dW[5]);
-		atomicAdd(&dL_dview[1].z, dL_dW[6]);
-		atomicAdd(&dL_dview[1].w, dL_dW[7]);
-		atomicAdd(&dL_dview[2].x, dL_dW[8]);
-		atomicAdd(&dL_dview[2].y, dL_dW[9]);
-		atomicAdd(&dL_dview[2].z, dL_dW[10]);
-		atomicAdd(&dL_dview[2].w, dL_dW[11]);
-		atomicAdd(&dL_dview[3].x, dL_dW[12]);
-		atomicAdd(&dL_dview[3].y, dL_dW[13]);
-		atomicAdd(&dL_dview[3].z, dL_dW[14]);
-		atomicAdd(&dL_dview[3].w, dL_dW[15]);
+		atomicAdd(&dL_dview[0].x, dL_dW[0] / (float)P);
+		atomicAdd(&dL_dview[0].y, dL_dW[1] / (float)P);
+		atomicAdd(&dL_dview[0].z, dL_dW[2] / (float)P);
+		atomicAdd(&dL_dview[1].x, dL_dW[4] / (float)P);
+		atomicAdd(&dL_dview[1].y, dL_dW[5] / (float)P);
+		atomicAdd(&dL_dview[1].z, dL_dW[6] / (float)P);
+		atomicAdd(&dL_dview[2].x, dL_dW[8] / (float)P);
+		atomicAdd(&dL_dview[2].y, dL_dW[9] / (float)P);
+		atomicAdd(&dL_dview[2].z, dL_dW[10] / (float)P);
+		atomicAdd(&dL_dview[3].x, dL_dW[12] / (float)P);
+		atomicAdd(&dL_dview[3].y, dL_dW[13] / (float)P);
+		atomicAdd(&dL_dview[3].z, dL_dW[14] / (float)P);
 	}
 
 	// That's the second part of the mean gradient. Previous computation
@@ -493,7 +489,7 @@ __global__ void preprocessCUDA(
 
 	// Compute gradient updates due to computing colors from SHs
 	if (shs)
-		computeColorFromSH(idx, D, M, valid_mask, (glm::vec3 *)means, *campos, shs, clamped, (glm::vec3 *)dL_dcolor, (glm::vec3 *)dL_dmeans, (glm::vec3 *)dL_dsh, dL_dview);
+		computeColorFromSH(P, idx, D, M, valid_mask, (glm::vec3 *)means, *campos, shs, clamped, (glm::vec3 *)dL_dcolor, (glm::vec3 *)dL_dmeans, (glm::vec3 *)dL_dsh, dL_dview);
 
 	// Compute gradient updates due to computing covariance from scale/rotation
 	if (scales)
@@ -677,9 +673,8 @@ __global__ void __launch_bounds__(BLOCK_X *BLOCK_Y)
 			const float dG_ddely = -gdy * con_o.z - gdx * con_o.y;
 
 			// Update valid point that close to depth for camera pose refinement
-			const int point_valid = (abs(pixel_depth - c_d) < abs(1e-2f * pixel_depth));
-			// const int point_valid = pixel_depth > c_d;
-			// atomicAdd(&(valid_mask[global_id]), point_valid);
+			const int point_valid = (abs(pixel_depth - c_d) < 0.01f /*abs(1e-3f * pixel_depth)*/);
+			atomicAdd(&(valid_mask[global_id]), 1);
 
 			// Update gradients w.r.t. 2D mean position of the Gaussian
 			atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx * ddelx_dx);
